@@ -51,15 +51,18 @@ echo "ARG1: $1" >> debug_args.txt
 echo "ARG2: $2" >> debug_args.txt
 
 set -e
-# The implementation calls: claude -- "$(cat PROMPT.md)"
-# So we expect -- as $1 and the prompt content as the second argument
-printf '%s' "$2" > "{output_filename}"
+# Preserve equals-style options and the prompt boundary under every shell.
+test "$1" = '--permission-mode=auto'
+test "$2" = '--'
+printf '%s' "$3" > "{output_filename}"
 """,
         )
 
         # Use agent name - shell will find it via PATH from RC file
         write_workmux_config(
-            mux_repo_path, agent="claude", panes=[{"command": "<agent>"}]
+            mux_repo_path,
+            agent="claude --permission-mode=auto",
+            panes=[{"command": "<agent>"}],
         )
 
         worktree_path = add_branch_and_get_worktree(

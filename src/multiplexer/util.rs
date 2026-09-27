@@ -334,8 +334,16 @@ pub fn escape_for_sh_c_inner_single_quote(s: &str) -> String {
 /// Used when the default shell (nushell, fish, etc.) doesn't support
 /// POSIX command substitution like `$(...)`.
 pub fn wrap_for_non_posix_shell(command: &str) -> String {
-    let escaped = command.replace('\'', "'\\''");
-    format!("sh -c '{}'", escaped)
+    if !command.contains('\'') {
+        return format!("sh -c '{command}'");
+    }
+
+    // Nushell does not implement POSIX adjacent-quote concatenation. Transport
+    // quoted commands as data so only sh interprets their syntax. eval keeps
+    // stdin attached to the terminal (unlike piping the script into sh).
+    use base64::Engine;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(command);
+    format!("sh -c 'eval \"$(printf %s {encoded} | base64 -d)\"'")
 }
 
 #[cfg(test)]
@@ -496,10 +504,46 @@ mod tests {
 
     #[test]
     fn test_wrap_for_non_posix_shell_with_single_quote() {
-        assert_eq!(
-            wrap_for_non_posix_shell("echo 'quoted'"),
-            "sh -c 'echo '\\''quoted'\\'''"
-        );
+        let output = std::process::Command::new("sh")
+            .args(["-c", &wrap_for_non_posix_shell("printf '%s' 'quoted'")])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"quoted");
+    }
+
+    #[test]
+    fn non_posix_wrapper_preserves_arguments_and_stdin() {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+
+        // Exercise installed shells; CI's multi-shell integration suite also
+        // covers the complete agent launch path.
+        for shell in ["sh", "fish", "nu"] {
+            let mut command = Command::new(shell);
+            if shell == "nu" {
+                command.arg("--no-config-file");
+            }
+            let script = "read -r line; printf '<%s>\\n' '--permission-mode=auto' -- 'quotes \" $HOME ; λ' \"$line\"; exit 7";
+            let child = command
+                .args(["-c", &wrap_for_non_posix_shell(script)])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn();
+            let mut child = match child {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                result => result.unwrap(),
+            };
+            child.stdin.take().unwrap().write_all(b"input\n").unwrap();
+            let output = child.wait_with_output().unwrap();
+            assert_eq!(output.status.code(), Some(7), "{shell}: {output:?}");
+            assert_eq!(
+                String::from_utf8(output.stdout).unwrap(),
+                "<--permission-mode=auto>\n<-->\n<quotes \" $HOME ; λ>\n<input>\n",
+                "{shell}"
+            );
+        }
     }
 
     #[test]
