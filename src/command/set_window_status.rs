@@ -57,7 +57,10 @@ impl StatusTarget {
             .ok_or_else(|| anyhow::anyhow!("{} is missing", STATUS_TARGET_BACKEND_ENV))?
             .parse::<BackendType>()
             .map_err(anyhow::Error::msg)?;
-        if !matches!(backend, BackendType::Tmux | BackendType::Zellij) {
+        if !matches!(
+            backend,
+            BackendType::Tmux | BackendType::Zellij | BackendType::Herdr
+        ) {
             return Err(anyhow::anyhow!(
                 "status targets do not support the {} backend",
                 backend
@@ -241,7 +244,8 @@ struct StatusBackendSignals {
 impl StatusBackendSignals {
     fn from_env() -> Self {
         Self {
-            workmux_backend: std::env::var_os("WORKMUX_BACKEND").is_some(),
+            workmux_backend: std::env::var_os("WORKMUX_BACKEND").is_some()
+                || std::env::var_os("HERDR_PANE_ID").is_some(),
             tmux: std::env::var_os("TMUX").is_some() || std::env::var_os("TMUX_PANE").is_some(),
             wezterm: std::env::var_os("WEZTERM_PANE").is_some(),
             zellij: std::env::var_os("ZELLIJ").is_some()

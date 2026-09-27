@@ -2863,9 +2863,12 @@ alternative terminal multiplexers:
   configuration.
 - **[Zellij](https://workmux.raine.dev/guide/zellij)** (experimental) - For
   users who prefer Zellij. Detected automatically via `$ZELLIJ`.
+- **[Herdr](docs/src/content/docs/guide/herdr.mdx)** (experimental) - Local
+  workspace and agent control, with Git worktree lifecycle managed by workmux.
+  Detected via `$HERDR_PANE_ID`; requires `$HERDR_SOCKET_PATH`.
 
 workmux auto-detects the backend from environment variables (`$TMUX`,
-`$WEZTERM_PANE`, `$KITTY_WINDOW_ID`, or `$ZELLIJ`). Session-specific variables
+`$HERDR_PANE_ID`, `$WEZTERM_PANE`, `$KITTY_WINDOW_ID`, or `$ZELLIJ`). Session-specific variables
 are checked first, so running tmux inside kitty correctly selects the tmux
 backend. Set `$WORKMUX_BACKEND` to override detection.
 

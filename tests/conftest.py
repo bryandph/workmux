@@ -185,6 +185,14 @@ class MuxEnvironment(ABC):
 
         # Base environment setup
         self.env = os.environ.copy()
+        for key in (
+            "HERDR_ENV",
+            "HERDR_PANE_ID",
+            "HERDR_WORKSPACE_ID",
+            "HERDR_TAB_ID",
+            "HERDR_SOCKET_PATH",
+        ):
+            self.env.pop(key, None)
         self.env["PATH"] = f"{self.fake_bin_dir}:{self.env.get('PATH', '')}"
         self.env["TMPDIR"] = str(self.tmp_path)
         self.env["HOME"] = str(self.home_path)

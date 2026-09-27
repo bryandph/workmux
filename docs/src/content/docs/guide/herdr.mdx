@@ -1,0 +1,80 @@
+---
+title: "Herdr"
+description: Use Herdr for workmux workspaces and agent interaction
+---
+
+[Herdr](https://herdr.dev) can host workmux panes on macOS and Linux. Run workmux
+inside a Herdr pane, with `mode: window` in your workmux configuration:
+
+```yaml
+mode: window
+```
+
+```sh
+workmux add feature-api --background
+workmux send feature-api "Run the focused tests and report the result."
+workmux capture feature-api
+workmux wait feature-api --timeout 120
+```
+
+Herdr is detected through `HERDR_PANE_ID`. An inherited tmux environment takes
+precedence; use `WORKMUX_BACKEND=herdr` to explicitly select Herdr in a nested
+environment. `HERDR_SOCKET_PATH` must identify the intended local server. The
+backend never attaches to an implicit default server or starts a server for you.
+
+## Ownership
+
+Workmux creates Git worktrees, runs setup and removal hooks, copies/symlinks files,
+and performs merges and checkout removal. Herdr opens the existing checkout with
+`worktree.open`, retaining worktree provenance in its UI. Closing a workspace
+closes terminals, without deleting the Git checkout. `workmux open` can reopen it.
+
+Workspace metadata records workmux ownership; removal uses the workspace ID,
+not the UI's focused workspace. After a server restart, workmux's existing
+name-and-path adoption safeguards recover ownership. Duplicate labels are never
+arbitrarily resolved. An already-open Herdr checkout cannot be reinitialized as
+a second workmux window; close it before attaching it through workmux.
+
+## Agents and status
+
+`workmux send` uses `agent.prompt`. Herdr validates the recognized agent and
+rejects prompts when it is blocked at an approval or question dialog. Failed
+requests are never retried as raw terminal input. `capture` reads rendered pane
+output; it is not a structured result channel or proof of successful work.
+
+Keep workmux's normal agent status hooks configured for `workmux status`, the
+dashboard, and `workmux wait`. Herdr's own detection and integrations remain
+responsible for its native agent status and notifications. Workmux's decorative
+status updates neither rename panes nor overwrite Herdr lifecycle state. Native
+Herdr event subscription and status-store unification are outside this backend.
+
+## Limits and verification
+
+- Window mode only; each workmux window is a Herdr workspace.
+- New workspaces append to the workspace list; insertion ordering is unsupported.
+- Splits accept percentages, not fixed cell sizes or stacked layouts.
+- Local Unix sockets only. Remote forwarding and Windows named pipes are not
+  implemented here.
+- API requests have a 10-second socket I/O timeout and an 8 MiB response limit.
+  A timeout does not prove a mutation failed; inspect state before retrying.
+- Deferred close operations use `HERDR_BIN_PATH`, or `herdr` from `PATH`, with
+  the original socket and workspace ID explicitly preserved.
+
+The backend requires the current JSON methods including `worktree.open`,
+`workspace.report_metadata`, `pane.send_input`, and `agent.prompt`. Missing
+methods return errors; there is no silent fallback to a weaker operation.
+
+Unit tests cover error envelopes, response identity, ambiguous labels, ownership,
+prompt rejection, and capture decoding. For an opt-in live smoke test, start a
+disposable server with isolated `XDG_CONFIG_HOME`, `XDG_STATE_HOME`,
+`HERDR_CONFIG_PATH`, and `HERDR_SOCKET_PATH`, build workmux, then run:
+
+```sh
+python3 scripts/test-herdr-backend.py --socket /absolute/path/to/test/herdr.sock
+```
+
+The smoke test creates temporary Git repositories and a synthetic agent process.
+It needs a C compiler for the synthetic process and never launches a model. Use
+only a disposable test server whose initial cwd is under `/tmp/workmux-herdr*`.
+Overriding only the config file and socket does **not** isolate Herdr's saved
+session layout; `XDG_CONFIG_HOME` is essential. The test refuses non-test panes.

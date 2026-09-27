@@ -7,6 +7,7 @@ pub mod agent;
 pub mod conversation;
 pub mod handle;
 pub mod handshake;
+pub mod herdr;
 pub mod kitty;
 pub mod tmux;
 pub mod types;
@@ -999,10 +1000,11 @@ pub trait Multiplexer: Send + Sync {
 ///
 /// 1. `$WORKMUX_BACKEND` set → use that backend
 /// 2. `$TMUX` set → tmux
-/// 3. `$WEZTERM_PANE` set → WezTerm
-/// 4. `$ZELLIJ`, `$ZELLIJ_PANE_ID`, or `$ZELLIJ_SESSION_NAME` set → Zellij
-/// 5. `$KITTY_WINDOW_ID` set → Kitty
-/// 6. None → defaults to tmux (for backward compatibility)
+/// 3. `$HERDR_PANE_ID` set → Herdr
+/// 4. `$WEZTERM_PANE` set → WezTerm
+/// 5. `$ZELLIJ`, `$ZELLIJ_PANE_ID`, or `$ZELLIJ_SESSION_NAME` set → Zellij
+/// 6. `$KITTY_WINDOW_ID` set → Kitty
+/// 7. None → defaults to tmux (for backward compatibility)
 ///
 /// This ordering ensures that running tmux inside kitty (or wezterm) correctly
 /// selects the innermost multiplexer.
@@ -1012,7 +1014,7 @@ pub fn detect_backend() -> BackendType {
             Ok(bt) => return bt,
             Err(_) => {
                 eprintln!(
-                    "workmux: invalid WORKMUX_BACKEND={val:?}, expected tmux|wezterm|kitty|zellij"
+                    "workmux: invalid WORKMUX_BACKEND={val:?}, expected tmux|wezterm|kitty|zellij|herdr"
                 );
             }
         }
@@ -1027,7 +1029,7 @@ pub fn detect_backend_strict() -> Result<BackendType> {
         && !value.trim().is_empty()
     {
         return value.parse().map_err(|_| {
-            anyhow!("invalid WORKMUX_BACKEND={value:?}, expected tmux|wezterm|kitty|zellij")
+            anyhow!("invalid WORKMUX_BACKEND={value:?}, expected tmux|wezterm|kitty|zellij|herdr")
         });
     }
 
@@ -1035,7 +1037,10 @@ pub fn detect_backend_strict() -> Result<BackendType> {
 }
 
 fn detect_backend_from_environment() -> BackendType {
-    resolve_backend(
+    // Herdr often runs inside a terminal with ambient WezTerm/kitty variables.
+    // Explicit overrides still win; an inner tmux session retains precedence.
+    resolve_backend_with_herdr(
+        std::env::var_os("HERDR_PANE_ID").is_some(),
         std::env::var("TMUX").is_ok(),
         std::env::var("WEZTERM_PANE").is_ok(),
         std::env::var("ZELLIJ").is_ok()
@@ -1043,6 +1048,20 @@ fn detect_backend_from_environment() -> BackendType {
             || std::env::var("ZELLIJ_SESSION_NAME").is_ok(),
         std::env::var("KITTY_WINDOW_ID").is_ok(),
     )
+}
+
+fn resolve_backend_with_herdr(
+    herdr: bool,
+    tmux: bool,
+    wezterm: bool,
+    zellij: bool,
+    kitty: bool,
+) -> BackendType {
+    if herdr && !tmux {
+        BackendType::Herdr
+    } else {
+        resolve_backend(tmux, wezterm, zellij, kitty)
+    }
 }
 
 /// Pure auto-detection logic, separated for testability.
@@ -1073,6 +1092,7 @@ pub fn create_backend(backend_type: BackendType) -> Arc<dyn Multiplexer> {
         BackendType::WezTerm => Arc::new(wezterm::WezTermBackend::new()),
         BackendType::Kitty => Arc::new(kitty::KittyBackend::new()),
         BackendType::Zellij => Arc::new(zellij::ZellijBackend::new()),
+        BackendType::Herdr => Arc::new(herdr::HerdrBackend::new()),
     }
 }
 
@@ -1083,6 +1103,7 @@ pub fn create_backend_for_instance(
     match backend_type {
         BackendType::Tmux => Arc::new(TmuxBackend::for_socket(instance)),
         BackendType::Zellij => Arc::new(zellij::ZellijBackend::for_session(instance)),
+        BackendType::Herdr => Arc::new(herdr::HerdrBackend::for_socket(instance)),
         _ => create_backend(backend_type),
     }
 }
@@ -1090,6 +1111,22 @@ pub fn create_backend_for_instance(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn herdr_overrides_outer_terminal_but_not_inner_tmux() {
+        assert_eq!(
+            resolve_backend_with_herdr(true, false, true, false, true),
+            BackendType::Herdr
+        );
+        assert_eq!(
+            resolve_backend_with_herdr(true, true, true, false, true),
+            BackendType::Tmux
+        );
+        assert_eq!(
+            resolve_backend_with_herdr(false, false, true, false, true),
+            BackendType::WezTerm
+        );
+    }
 
     fn ownership_record(
         window_id: &str,
