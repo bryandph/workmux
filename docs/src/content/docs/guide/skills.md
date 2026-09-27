@@ -135,6 +135,14 @@ workmux send myproject:docs-update "also add the API reference"
 workmux status myproject:feature-auth
 ```
 
+Sending a prompt clears the selected agent's previous status until an agent hook
+reports a fresh status. This prevents a following `workmux wait` from treating
+that agent's previous `done` as completion of the new prompt. A rejected send
+restores the previous status unless another state update has already arrived.
+Agents without status hooks need an explicit status update before `wait` can
+succeed. In a multi-agent worktree, `wait` still succeeds when any agent reaches
+the requested status; it is not a per-prompt completion receipt.
+
 Lifecycle commands (`add`, `open`, `merge`, `remove`, `close`) remain scoped to the current repository.
 
 ### Fan-out / fan-in pattern

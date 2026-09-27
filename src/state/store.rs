@@ -593,6 +593,41 @@ impl StateStore {
         })
     }
 
+    /// Send a new prompt without leaving the previous turn's status visible.
+    ///
+    /// Do not hold the state lock during transport: agent hooks may run before
+    /// the send returns. On failure restore the snapshot only if no writer has
+    /// changed it, using file identity rather than second-resolution timestamps.
+    pub fn send_with_status_reset<T>(
+        &self,
+        key: &PaneKey,
+        send: impl FnOnce() -> Result<T>,
+    ) -> Result<T> {
+        let previous = self.with_agent_lock(|store| {
+            let previous = store.get_agent(key)?;
+            store.clear_agent_status_locked(key)?;
+            let revision = store
+                .get_agent_with_revision(key)?
+                .map(|(_, revision)| revision);
+            Ok(previous.zip(revision))
+        })?;
+
+        let result = send();
+        if result.is_err()
+            && let Some((previous, expected)) = previous
+        {
+            self.with_agent_lock(|store| {
+                if let Some((_, current)) = store.get_agent_with_revision(key)?
+                    && current == expected
+                {
+                    store.upsert_agent_locked(&previous)?;
+                }
+                Ok(())
+            })?;
+        }
+        result
+    }
+
     /// Clear the stored activity status of one agent without deleting it.
     ///
     /// Resets only the status fields so the pane identity and metadata survive
@@ -1693,6 +1728,77 @@ mod tests {
 
         // Should not error
         store.delete_agent(&key).unwrap();
+    }
+
+    #[test]
+    fn send_resets_previous_status_before_dispatch() {
+        let (store, _dir) = test_store();
+        let key = test_pane_key();
+        let mut state = test_agent_state(key.clone());
+        state.status = Some(AgentStatus::Done);
+        store.upsert_agent(&state).unwrap();
+        store
+            .send_with_status_reset(&key, || {
+                let pending = store.get_agent(&key)?.unwrap();
+                assert_eq!(pending.status, None);
+                assert_eq!(pending.status_ts, None);
+                assert_eq!(pending.command, state.command);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(store.get_agent(&key).unwrap().unwrap().status, None);
+    }
+
+    #[test]
+    fn rejected_send_restores_previous_status() {
+        let (store, _dir) = test_store();
+        let key = test_pane_key();
+        let state = test_agent_state(key.clone());
+        store.upsert_agent(&state).unwrap();
+        let result: Result<()> = store.send_with_status_reset(&key, || anyhow::bail!("rejected"));
+        assert!(result.is_err());
+        assert_eq!(
+            serde_json::to_value(store.get_agent(&key).unwrap().unwrap()).unwrap(),
+            serde_json::to_value(state).unwrap()
+        );
+    }
+
+    #[test]
+    fn send_preserves_hooks_even_when_transport_fails() {
+        for fails in [false, true] {
+            let (store, _dir) = test_store();
+            let key = test_pane_key();
+            let mut state = test_agent_state(key.clone());
+            state.status = Some(AgentStatus::Done);
+            store.upsert_agent(&state).unwrap();
+            state.pane_title = Some("new turn".to_string());
+            let result = store.send_with_status_reset(&key, || {
+                // A complete turn can occur before send returns, with the same
+                // status and timestamp as the previous turn. Do not lose it.
+                store.upsert_agent(&state)?;
+                if fails {
+                    anyhow::bail!("transport interrupted");
+                }
+                Ok(())
+            });
+            assert_eq!(result.is_err(), fails);
+            let current = store.get_agent(&key).unwrap().unwrap();
+            assert_eq!(current.status, Some(AgentStatus::Done));
+            assert_eq!(current.pane_title, state.pane_title);
+        }
+    }
+
+    #[test]
+    fn rejected_send_does_not_resurrect_deleted_agent() {
+        let (store, _dir) = test_store();
+        let key = test_pane_key();
+        store.upsert_agent(&test_agent_state(key.clone())).unwrap();
+        let result: Result<()> = store.send_with_status_reset(&key, || {
+            store.delete_agent(&key)?;
+            anyhow::bail!("agent exited")
+        });
+        assert!(result.is_err());
+        assert!(store.get_agent(&key).unwrap().is_none());
     }
 
     #[test]

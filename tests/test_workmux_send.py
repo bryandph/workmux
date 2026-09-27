@@ -19,7 +19,44 @@ from .conftest import (
     run_workmux_command,
     write_workmux_config,
 )
-from .support.agent_state import start_active_agent
+from .support.agent_state import (
+    build_status_cmd,
+    list_agent_state_files,
+    read_agent_state,
+    start_active_agent,
+)
+
+
+def test_send_wait_does_not_accept_previous_done(
+    mux_server: MuxEnvironment, workmux_exe_path: Path, mux_repo_path: Path
+):
+    """A sent prompt invalidates done until a fresh hook reports status."""
+    env = mux_server
+    agent = start_active_agent(
+        env, workmux_exe_path, mux_repo_path, "feature-send-wait", status="done"
+    )
+    # The synthetic agent is a shell: ':' accepts input without running hooks.
+    run_workmux_command(
+        env, workmux_exe_path, mux_repo_path, "send feature-send-wait :"
+    )
+    states = [read_agent_state(path) for path in list_agent_state_files(env)]
+    assert len(states) == 1
+    assert states[0]["status"] is None
+    result = run_workmux_command(
+        env,
+        workmux_exe_path,
+        mux_repo_path,
+        "wait feature-send-wait --timeout 2",
+        expect_fail=True,
+    )
+    assert result.exit_code == 1
+    assert "Timeout" in result.stderr
+
+    env.send_keys(agent.window, build_status_cmd(env, workmux_exe_path, "done"))
+    result = run_workmux_command(
+        env, workmux_exe_path, mux_repo_path, "wait feature-send-wait --timeout 5"
+    )
+    assert result.exit_code == 0
 
 
 def test_send_error_worktree_not_found(

@@ -4,6 +4,7 @@ use anyhow::{Result, anyhow};
 
 use crate::config;
 use crate::multiplexer::{create_backend, detect_backend};
+use crate::state::{PaneKey, StateStore};
 use crate::workflow;
 
 pub fn run(name: &str, text: Option<&str>, file: Option<&str>) -> Result<()> {
@@ -40,7 +41,14 @@ pub fn run(name: &str, text: Option<&str>, file: Option<&str>) -> Result<()> {
         .as_deref()
         .or(cfg.agent.as_deref())
         .or(agent.agent_command.as_deref());
-    mux.send_prompt_to_agent(&agent.pane_id, content, agent_identity)?;
+    let key = PaneKey {
+        backend: mux.name().to_string(),
+        instance: mux.resolve_instance_id()?,
+        pane_id: agent.pane_id.clone(),
+    };
+    StateStore::new()?.send_with_status_reset(&key, || {
+        mux.send_prompt_to_agent(&agent.pane_id, content, agent_identity)
+    })?;
 
     Ok(())
 }

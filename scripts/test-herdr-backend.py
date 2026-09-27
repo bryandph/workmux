@@ -160,8 +160,10 @@ def main():
         agent="codex",
         state="idle",
     )
-    run(binary, "set-window-status", "working", cwd=wt, extra_env=pane_env)
+    run(binary, "set-window-status", "done", cwd=wt, extra_env=pane_env)
     run(binary, "send", task, "test prompt")
+    stale = run(binary, "wait", task, "--timeout", "1", check=False)
+    assert stale.returncode == 1 and "Timeout" in stale.stderr, stale.stderr
     output = ""
     for _ in range(40):
         output = run(binary, "capture", task).stdout
@@ -182,7 +184,8 @@ def main():
     )
     blocked = run(binary, "send", task, "must-not-be-injected", check=False)
     assert blocked.returncode != 0 and "agent_blocked" in blocked.stderr, blocked.stderr
-    print("PASS blocked prompt rejected", flush=True)
+    run(binary, "wait", task, "--timeout", "1")
+    print("PASS blocked prompt rejected and previous status restored", flush=True)
 
     api("workspace.close", workspace_id=ws["workspace_id"])
     assert wt.exists(), "closing UI must not delete checkout"
